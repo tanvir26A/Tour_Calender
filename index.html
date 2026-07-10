@@ -447,14 +447,24 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
-  // ---------- Supabase config ----------
-  // Replace these two values with your own project's URL and anon public key
-  // (Supabase Dashboard -> Project Settings -> API)
-  const SUPABASE_URL = 'YOUR_SUPABASE_PROJECT_URL';
-  const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
-  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  // ---------- Firebase config ----------
+  // Replace these values with your own project's config
+  // (Firebase Console -> Project Settings -> General -> "Your apps" -> SDK setup and configuration)
+  const firebaseConfig = {
+    apiKey: "AIzaSyCMXUO0tgupDNtBgAGFgwHUsWlIjZEknkw",
+    authDomain: "tour-calendar-5f2c6.firebaseapp.com",
+    databaseURL: "https://tour-calendar-5f2c6-default-rtdb.firebaseio.com",
+    projectId: "tour-calendar-5f2c6",
+    storageBucket: "tour-calendar-5f2c6.firebasestorage.app",
+    messagingSenderId: "333117205571",
+    appId: "1:333117205571:web:bd1b5a3136d22b9f92b8f6"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+  const entriesRef = db.collection('tour_entries');
 
   function toBn(n){
     return String(n);
@@ -502,39 +512,37 @@
   function pad(n){ return n < 10 ? '0'+n : ''+n; }
   function dateKey(y,m,d){ return `${y}-${pad(m+1)}-${pad(d)}`; }
 
-  // ---------- Storage (Supabase) ----------
-  async function loadEntries(){
-    try{
-      const { data, error } = await sb
-        .from('tour_entries')
-        .select('*')
-        .order('created_at', { ascending: true });
-      if(error) throw error;
-      entries = (data || []).map(row => ({
-        id: row.id,
-        date: row.date,
-        name: row.name,
-        destination: row.destination,
-        people: row.people,
-        amount: Number(row.amount),
-        status: row.status,
-        createdAt: new Date(row.created_at).getTime()
-      }));
-    }catch(e){
-      console.error(e);
-      entries = [];
-      showToast('⚠️ Could not load data — check Supabase config');
-    }
-    renderAll();
-  }
-
-  // Live sync: refresh automatically when anyone (any device) changes data
+  // ---------- Storage (Firebase Firestore) ----------
+  // A single live listener both loads the initial data AND keeps it in
+  // sync in real time — when anyone on any device adds/edits/deletes,
+  // everyone else's screen updates automatically.
   function subscribeRealtime(){
-    sb.channel('tour_entries_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tour_entries' }, () => {
-        loadEntries();
-      })
-      .subscribe();
+    entriesRef.onSnapshot(
+      (snapshot) => {
+        entries = snapshot.docs
+          .map(doc => {
+            const d = doc.data();
+            return {
+              id: doc.id,
+              date: d.date,
+              name: d.name,
+              destination: d.destination,
+              people: d.people,
+              amount: Number(d.amount),
+              status: d.status,
+              createdAt: d.createdAt || 0
+            };
+          })
+          .sort((a, b) => a.createdAt - b.createdAt);
+        renderAll();
+      },
+      (err) => {
+        console.error(err);
+        entries = [];
+        renderAll();
+        showToast('⚠️ Could not load data — check Firebase config');
+      }
+    );
   }
 
   // ---------- Sound ----------
@@ -603,10 +611,10 @@
 
     els.addBtn.disabled = true;
     try{
-      const { error } = await sb.from('tour_entries').insert({
-        date, name, destination: dest, people, amount, status
+      await entriesRef.add({
+        date, name, destination: dest, people, amount, status,
+        createdAt: Date.now()
       });
-      if(error) throw error;
 
       const [y,m] = date.split('-').map(Number);
       viewYear = y; viewMonth = m - 1;
@@ -614,7 +622,7 @@
       resetForm(false);
       playChime();
       showToast('✓ Tour entry added');
-      await loadEntries();
+      // no manual reload needed — the onSnapshot listener updates entries automatically
     }catch(e){
       console.error(e);
       showToast('⚠️ Failed to save');
@@ -749,9 +757,7 @@
         sel.addEventListener('change', async (ev) => {
           const id = ev.target.getAttribute('data-id');
           try{
-            const { error } = await sb.from('tour_entries').update({ status: ev.target.value }).eq('id', id);
-            if(error) throw error;
-            await loadEntries();
+            await entriesRef.doc(id).update({ status: ev.target.value });
             openModal(key);
             showToast('✓ Status updated');
           }catch(e){
@@ -765,9 +771,7 @@
           const id = ev.target.getAttribute('data-id');
           if(confirm('Delete this entry?')){
             try{
-              const { error } = await sb.from('tour_entries').delete().eq('id', id);
-              if(error) throw error;
-              await loadEntries();
+              await entriesRef.doc(id).delete();
               openModal(key);
               showToast('🗑️ Entry deleted');
             }catch(e){
@@ -815,7 +819,6 @@
   // default date field to today
   els.date.value = dateKey(today.getFullYear(), today.getMonth(), today.getDate());
 
-  loadEntries();
   subscribeRealtime();
 </script>
 </body>
